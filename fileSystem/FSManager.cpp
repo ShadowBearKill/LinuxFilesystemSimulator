@@ -478,23 +478,41 @@ void FSManager::registerUser(int slot,const std::string& username, const std::st
 }
 
 void FSManager::unregisterUser(int slot,const std::string& username) {
-    // TODO 目前的实现只有删除用户目录，没有删除用户信息，需要修改
+    // 检查是否为root用户，只有root可以删除用户
+    if (userInfos_[slot].userID_ != 0) {
+        std::string err = "Permission refused: only root can unregister users\n";
+        throw std::runtime_error(err);
+    }
+
     auto items = getDirItems(homeDirInumber_);
     for (auto it = items.begin(); it != items.end(); ++it) {
         if (username == it->FileName) {
             if (it->FileType == DIR) {
+                // 递归删除用户目录及其所有内容
+                rmRecursive(slot, it->Inumber);
+                // 删除用户目录本身
+                fileSystem_.remove(it->Inumber);
+                // 从父目录中移除目录项
                 items.erase(it);
                 writeBackDir(homeDirInumber_, items);
+
+                // 从用户映射中删除用户信息
+                {
+                    std::unique_lock<std::shared_mutex> lock(userMapMtx);
+                    userIDMap_.erase(username);
+                    userHashMap_.erase(username);
+                }
+
                 return;
             }
             else {
-                break;
+                std::string err = "The user directory <" + username + "> is not a directory!\n";
+                throw std::runtime_error(err);
             }
         }
     }
-    std::string err;
-    err = err + "The user: <" + username + "> isn't existing!\n";
-    throw std::runtime_error(err.c_str());
+    std::string err = "The user <" + username + "> does not exist!\n";
+    throw std::runtime_error(err);
 }
 
 void FSManager::login(int slot,std:: string username,std:: string  password) {
@@ -831,43 +849,75 @@ bool FSManager::haveWritePermission(int slot,uint32_t permission, uint32_t userI
     else return (permission & 0b000010) != 0;
 }
 
+// 递归删除目录的辅助函数
+void FSManager::rmRecursive(int slot, int dirInumber) {
+    auto items = getDirItems(dirInumber);
+
+    // 递归删除所有子文件和子目录
+    for (auto& item : items) {
+        if (strcmp(item.FileName, ".") != 0 && strcmp(item.FileName, "..") != 0) {
+            if (item.FileType == DIR) {
+                // 递归删除子目录
+                rmRecursive(slot, item.Inumber);
+            }
+            // 删除文件或空目录
+            fileSystem_.remove(item.Inumber);
+        }
+    }
+}
+
 void FSManager::rm(int slot,std::string  filename) {
+    rm(slot, filename, false); // 默认不强制删除
+}
+
+void FSManager::rm(int slot,std::string  filename, bool force) {
     int tInumber;
     if(filename[0] == '/') {tInumber = getPathInumber(filename);splitPath(filename);}
     else tInumber = userInfos_[slot].workDirInumber_;
     auto items = getDirItems(tInumber);
+
+    // 禁止删除"."和".."目录
     if (filename == "." || filename == "..") {
-        std::cerr << "System error! Can't remove this directory!" << std::endl;
+        std::string err = "System error! Can't remove directory <" + filename + ">\n";
+        throw std::runtime_error(err);
     }
+
     for (auto it = items.begin(); it != items.end(); ++it) {
         if (filename == it->FileName) {
-            // 有没有写权限？
+            // 检查是否有删除权限
             if (!haveWritePermission(slot,it->FilePermission,it->FileOwnerID)) {
                 std::string err;
                 err += "Permission refused: can't remove <" + filename + ">\n";
                 throw std::runtime_error(err.c_str());
             }
-            // 有写权限自然是可以删除
-            // 不过如果删除的文件是目录文件，就需要提醒一下
+
+            // 如果是目录文件，需要递归删除
             if (it->FileType == DIR) {
-                std::string answer;
-                std::cout << "The file <"
-                          << filename
-                          <<"> is a directory, it will also remove all its sub-directory" << std::endl;
-                std::cout << "Do you really want to remove it?(Y/N): ";
-                std::cin >> answer;
-                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                if (answer == "Y" || answer == "y") {
-                    // 还需要递归删除目录下的文件
-                    auto itemss = getDirItems(it->Inumber);
-                    for (auto & iitem : itemss) {
-                        if(strcmp(iitem.FileName, ".") != 0  && strcmp(iitem.FileName, "..") != 0) {
-                            rm(slot, iitem.FileName);
-                        }
-                    }
-                    // 再删除目录本身
+                bool shouldDelete = force;
+
+                if (!force) {
+                    // 通过共享内存请求用户确认
+                    std::string promptMsg = "The file <" + filename + "> is a directory, it will also remove all its sub-directory\nDo you really want to remove it?(Y/N): ";
+                    strcpy(shm[slot]->prompt, promptMsg.c_str());
+                    shm[slot]->needConfirm = true;
+
+                    // 通知shell需要用户输入
+                    SetEvent(hEvents[slot]);
+
+                    // 等待用户输入
+                    WaitForSingleObject(hEvents[slot], INFINITE);
+
+                    // 检查用户输入
+                    std::string answer = shm[slot]->userInput;
+                    shouldDelete = (answer == "Y" || answer == "y");
+                    shm[slot]->needConfirm = false;
+                }
+
+                if (shouldDelete) {
+                    // 使用辅助函数递归删除目录内容
+                    rmRecursive(slot, it->Inumber);
+                    // 删除目录本身
                     fileSystem_.remove(it->Inumber);
-                    // 接下来就是将目录项中的有关该文件的信息清除
                     items.erase(it);
                 }
                 else {
@@ -875,13 +925,18 @@ void FSManager::rm(int slot,std::string  filename) {
                 }
             }
             else {
-                fileSystem_.remove(it->Inumber) ;
+                // 删除普通文件
+                fileSystem_.remove(it->Inumber);
                 items.erase(it);
             }
             writeBackDir(tInumber, items);
             return;
         }
     }
+
+    // 如果没有找到文件，抛出错误
+    std::string err = "The file <" + filename + "> does not exist!\n";
+    throw std::runtime_error(err);
 }
 
 // 编辑文件

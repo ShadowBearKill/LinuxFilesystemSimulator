@@ -16,6 +16,9 @@ struct SharedMemory {
     char path[128];
     char name[32];
     char eventName[64]; // 用于存储事件对象的名称
+    char prompt[512];       // 交互提示信息
+    char userInput[256];    // 用户输入
+    bool needConfirm;       // 是否需要用户确认
 };
 struct Pool {
     char pool[10];        // 状态数组：'n' 空闲, 'r' 正在申请, 'y' 已分配
@@ -103,6 +106,22 @@ public:
     void wait() {
         // 等待事件触发
         WaitForSingleObject(hEvent, INFINITE);
+
+        // 检查是否需要用户确认
+        if (shm->needConfirm) {
+            // 显示提示信息
+            std::cout << shm->prompt;
+
+            // 获取用户输入
+            std::string userInput;
+            std::getline(std::cin, userInput);
+
+            // 将用户输入写入共享内存
+            strcpy(shm->userInput, userInput.c_str());
+
+            // 通知文件系统用户已输入
+            notify();
+        }
     }
 
     void notify() {
@@ -199,6 +218,9 @@ public:
         ZeroMemory(shm->arg1,strlen(shm->arg1));
         ZeroMemory(shm->arg2,strlen(shm->arg2));
         ZeroMemory(shm->result,strlen(shm->result));
+        ZeroMemory(shm->prompt,strlen(shm->prompt));
+        ZeroMemory(shm->userInput,strlen(shm->userInput));
+        shm->needConfirm = false;
     }
 
     void run() {
@@ -236,6 +258,10 @@ public:
             }
             else if (streq(cmd, "rm")) {
                 wait();
+                // 显示结果（如果有错误信息）
+                if (strlen(shm->result) > 0) {
+                    std::cout << shm->result;
+                }
             }
             else if (streq(cmd, "cat")) {
                 wait();

@@ -77,6 +77,9 @@ struct SharedMemory {
     char result[1024];       // 结果
     char path[128];
     char name[32];
+    char prompt[512];       // 交互提示信息
+    char userInput[256];    // 用户输入
+    bool needConfirm;       // 是否需要用户确认
 };
 
 constexpr static int MaxUsers = 10;
@@ -130,6 +133,7 @@ public:
     static void splitPath(std::string& path);
     void touch(int slot,std::string filename1,uint32_t permission = RW_R__,bool init = false);
     void rm(int slot,std::string filename1);
+    void rm(int slot,std::string filename1, bool force); // 支持强制删除的版本
     void vim(int slot,std::string filename1,std::string text="");
     void vim2(int slot,std::string filename1, const std::string& text,bool append=false,bool init = false);
     void cat(int slot,std::string filename1);
@@ -178,6 +182,7 @@ private:
     [[nodiscard]] bool haveReadPermission(int slot,uint32_t permission, uint32_t userID) const;
     std::string getDirName(int parentInumber, int childInumber);
     int getDirOwnerID(int Inumber);
+    void rmRecursive(int slot, int dirInumber); // 递归删除目录的辅助函数
     static std::string permissionToString(uint32_t p, uint32_t type);
     uint32_t StringToPermission(const std::string& str);
     DirItem makeDirItem(const uint32_t& fileType, const uint32_t& fileSize, const uint32_t& inumber,
