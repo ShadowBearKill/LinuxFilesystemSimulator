@@ -39,7 +39,7 @@ private:
 public:
     Shell() {
 
-        hPool = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, reinterpret_cast<LPCSTR>(L"Global\\Pool"));
+        hPool = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, L"Local\\Pool");
         if (!hPool) {
             throw std::runtime_error("Could not open file mapping.");
         }
@@ -59,7 +59,7 @@ public:
         }
         std::cout << "Allocated User ID: " << userId << std::endl;
 
-        std::string s = "Global\\SharedMemory" + std::to_string(userId);
+        std::string s = "Local\\SharedMemory" + std::to_string(userId);
 
         // 打开共享内存
         hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, s.c_str());
@@ -73,14 +73,14 @@ public:
             throw std::runtime_error("Could not map view of file.");
         }
 
-        std::string eventName = "Global\\ShellEvent" + std::to_string(userId);
+        std::string eventName = "Local\\ShellEvent" + std::to_string(userId);
         strcpy(shm->eventName, eventName.c_str());
         hEvent = OpenEvent(EVENT_ALL_ACCESS, FALSE, eventName.c_str());
         if (!hEvent) {
             throw std::runtime_error("Could not open event.");
         }
 
-        newShell = OpenEvent(EVENT_ALL_ACCESS, FALSE, "Global\\NewShellEvent");
+        newShell = OpenEvent(EVENT_ALL_ACCESS, FALSE, L"Local\\NewShellEvent");
         if (!newShell) {
             throw std::runtime_error("Could not open new shell event.");
         }
@@ -112,7 +112,10 @@ public:
 
     // 分配用户ID
     int allocateUserId() {
-        while (true) {
+        int retryCount = 0;
+        const int maxRetries = 100; // 最大重试次数
+
+        while (retryCount < maxRetries) {
             // 获取互斥信号量
             WaitForSingleObject(pool->poolMutex, INFINITE);
 
@@ -131,9 +134,13 @@ public:
             // 释放互斥信号量
             ReleaseSemaphore(pool->poolMutex, 1, nullptr);
 
-            // 当前无空闲槽位，稍等再重试
-            return -1;
+            // 当前无空闲槽位，等待一段时间后重试
+            retryCount++;
+            Sleep(100); // 等待100毫秒
         }
+
+        // 超过最大重试次数，返回失败
+        return -1;
     }
 
     void releaseUserId() {

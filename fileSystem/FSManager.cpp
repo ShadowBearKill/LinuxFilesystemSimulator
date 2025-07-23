@@ -28,9 +28,9 @@ FSManager::FSManager(const std::string& diskFile, int blocks){
 
     // 初始化文件映射
     hPool = CreateFileMapping(
-            INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(SharedMemory), reinterpret_cast<LPCSTR>(L"Global\\Pool"));
+            INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(Pool), L"Local\\Pool");
     if (!hPool) {
-        throw std::runtime_error("Could not open file mapping.");
+        throw std::runtime_error("Could not create file mapping for pool.");
     }
     pool = (Pool*)MapViewOfFile(hPool, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Pool));
     if (!pool) {
@@ -38,7 +38,7 @@ FSManager::FSManager(const std::string& diskFile, int blocks){
         throw std::runtime_error("Could not map view of file.");
     }
     // 初始化互斥信号量
-    pool->poolMutex = CreateSemaphore(nullptr, 1, 1, "Global\\PoolMutex");
+    pool->poolMutex = CreateSemaphore(nullptr, 1, 1, L"Local\\PoolMutex");
     if (!pool->poolMutex) {
         throw std::runtime_error("Could not create semaphore.");
     }
@@ -48,7 +48,7 @@ FSManager::FSManager(const std::string& diskFile, int blocks){
     }
     // 初始化共享内存
     for (int i = 0; i <10;i++){
-        std::string s = "Global\\SharedMemory" + std::to_string(i+1);
+        std::string s = "Local\\SharedMemory" + std::to_string(i+1);
         hMapFiles[i] = CreateFileMapping(
                 INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(SharedMemory), s.c_str());
         if (!hMapFiles[i]) {
@@ -63,13 +63,13 @@ FSManager::FSManager(const std::string& diskFile, int blocks){
     }
     // 初始化信号量
     for (int i = 0; i < 10; i++) {
-        std::string eventName = "Global\\ShellEvent" + std::to_string(i + 1);
+        std::string eventName = "Local\\ShellEvent" + std::to_string(i + 1);
         hEvents[i] = CreateEvent(nullptr, FALSE, FALSE, eventName.c_str());
         if (!hEvents[i]) {
             throw std::runtime_error("Could not create event.");
         }
     }
-    newShell = CreateEvent(nullptr, FALSE, FALSE, "Global\\NewShellEvent");
+    newShell = CreateEvent(nullptr, FALSE, FALSE, L"Local\\NewShellEvent");
     if (!newShell) {
         throw std::runtime_error("Could not create new shell event.");
     }
